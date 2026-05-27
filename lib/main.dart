@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -15,9 +16,9 @@ class NeonTransformerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Neon Art Transformer',
+      title: 'Neon Ultra Fidelity',
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF050508),
+        scaffoldBackgroundColor: const Color(0xFF020204),
         primaryColor: Colors.pinkAccent,
       ),
       debugShowCheckedModeBanner: false,
@@ -35,7 +36,7 @@ class NeonProcessorScreen extends StatefulWidget {
 
 class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
   File? _imageFile;
-  List<List<Offset>> _extractedLines = [];
+  ui.Image? _processedNeonImage; 
   bool _isLoading = false;
   Color _selectedNeonColor = Colors.pinkAccent;
   final ImagePicker _picker = ImagePicker();
@@ -51,93 +52,119 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
   Future<void> _pickImage() async {
     final XFile? pickedFile = await _picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 600, 
-      maxHeight: 600,
+      maxWidth: 1200, // رفع الدقة لـ 1200 لضمان عدم ضياع أي بكسل رفيع
+      maxHeight: 1200,
     );
 
     if (pickedFile != null) {
       setState(() {
         _imageFile = File(pickedFile.path);
-        _extractedLines = [];
+        _processedNeonImage = null;
         _isLoading = true;
       });
-      _processImageLines(pickedFile.path);
+      _renderNeonImage(pickedFile.path, _selectedNeonColor);
     }
   }
 
-  Future<void> _processImageLines(String path) async {
-    final List<List<Offset>> lines = await compute(_extractHighQualityLines, path);
+  void _updateNeonColor(Color newColor) {
+    if (_imageFile == null || _isLoading) return;
     setState(() {
-      _extractedLines = lines;
-      _isLoading = false;
+      _selectedNeonColor = newColor;
+      _isLoading = true;
     });
+    _renderNeonImage(_imageFile!.path, newColor);
   }
 
-  static List<List<Offset>> _extractHighQualityLines(String filePath) {
-    final bytes = File(filePath).readAsBytesSync();
+  Future<void> _renderNeonImage(String path, Color neonColor) async {
+    final Uint8List? pngBytes = await compute(_convertAllLinesToNeon, {
+      'path': path,
+      'color': neonColor.value,
+    });
+
+    if (pngBytes != null) {
+      ui.decodeImageFromList(pngBytes, (ui.Image img) {
+        setState(() {
+          _processedNeonImage = img;
+          _isLoading = false;
+        });
+      });
+    } else {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // 🛠️ الخوارزمية المطورة جداً لالتقاط تفاصيل الخطوط مهما كانت نحيفة (Fidelity Max)
+  static Uint8List? _convertAllLinesToNeon(Map<String, dynamic> params) {
+    final String path = params['path'];
+    final int colorValue = params['color'];
+    final Color selectedColor = Color(colorValue);
+
+    final bytes = File(path).readAsBytesSync();
     img.Image? originalImage = img.decodeImage(bytes);
-    if (originalImage == null) return [];
+    if (originalImage == null) return null;
 
-    img.Image processed = img.grayscale(originalImage);
-    processed = img.gaussianBlur(processed, radius: 2); 
+    int width = originalImage.width;
+    int height = originalImage.height;
 
-    int width = processed.width;
-    int height = processed.height;
-    
-    List<List<bool>> visited = List.generate(width, (_) => List.filled(height, false));
-    List<List<Offset>> detectedLines = [];
-    const int threshold = 130; 
+    // 1. تحويل الصورة إلى التدرج الرمادي بدون أي بلور (تنعيم) للحفاظ على الخطوط النحيفة كالشعر
+    img.Image gray = img.grayscale(originalImage);
 
-    for (int x = 2; x < width - 2; x += 1) {
-      for (int y = 2; y < height - 2; y += 1) {
-        final pixel = processed.getPixel(x, y);
-        final double luminance = pixel.r * 0.299 + pixel.g * 0.587 + pixel.b * 0.114;
+    // 2. إنشاء الكانفاس الأسود بالكامل للخلفية
+    img.Image neonCanvas = img.Image(width: width, height: height);
+    img.fill(neonCanvas, color: img.ColorRgba8(5, 5, 8, 255)); 
 
-        if (luminance < threshold && !visited[x][y]) {
-          List<Offset> currentLine = [];
-          List<PointInt> queue = [PointInt(x, y)];
-          visited[x][y] = true;
+    // 3. الفحص البكسلي المتقدم المعتمد على التباين الموضعي
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final pixel = gray.getPixel(x, y);
+        double currentLuminance = (pixel.r * 0.299 + pixel.g * 0.587 + pixel.b * 0.114) / 255.0;
 
-          while (queue.isNotEmpty) {
-            PointInt p = queue.removeLast();
-            if (currentLine.isEmpty || (Offset(p.x.toDouble(), p.y.toDouble()) - currentLine.last).distance > 4) {
-              currentLine.add(Offset(p.x.toDouble(), p.y.toDouble()));
+        // خوارزمية ذكية: نتحقق من محيط البكسل لمعرفة ما إذا كان جزءاً من خط رفيع
+        // نقوم بحساب التباين المباشر مقارنة بمتوسط إضاءة الورقة حوله
+        bool isLine = false;
+        double intensity = 0.0;
+
+        // إذا كان البكسل داكناً بشكل عام (الخطوط العريضة)
+        if (currentLuminance < 0.90) { 
+          isLine = true;
+          intensity = (1.0 - currentLuminance) * 1.2; // تعزيز الإضاءة للخطوط الرمادية
+        } 
+        // التقط الخطوط الرفيعة جداً (حتى لو كانت رمادية فاتحة على خلفية رمادية)
+        else if (currentLuminance < 0.96) {
+          // فحص عينة سريعة من الجيران للتأكد أنه خط وليس نويز
+          if (x > 1 && x < width - 1 && y > 1 && y < height - 1) {
+            final pRight = gray.getPixel(x + 1, y);
+            double lumRight = (pRight.r * 0.299 + pRight.g * 0.587 + pRight.b * 0.114) / 255.0;
+            
+            // إذا كان البكسل الحالي أدكن من جاره بأكثر من 2%، إذن هو خط رفيع جداً!
+            if ((lumRight - currentLuminance) > 0.02) {
+              isLine = true;
+              intensity = (1.0 - currentLuminance) * 2.5; // مضاعفة القوة للخطوط الرفيعة لتظهر بوضوح مشع
             }
-
-            for (int dx = -2; dx <= 2; dx += 1) {
-              for (int dy = -2; dy <= 2; dy += 1) {
-                int nx = p.x + dx;
-                int ny = p.y + dy;
-
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                  if (!visited[nx][ny]) {
-                    final px = processed.getPixel(nx, ny);
-                    final double nLum = px.r * 0.299 + px.g * 0.587 + px.b * 0.114;
-                    if (nLum < threshold) {
-                      visited[nx][ny] = true;
-                      queue.add(PointInt(nx, ny));
-                    }
-                  }
-                }
-              }
-            }
-            if (currentLine.length > 250) break;
           }
+        }
 
-          if (currentLine.length > 6) {
-            detectedLines.add(currentLine);
-          }
+        if (isLine) {
+          intensity = intensity.clamp(0.0, 1.0);
+
+          // دمج بكسل النيون المشع مع الحفاظ المطلق على الحجم الأصلي (بكسل مقابل بكسل)
+          int r = (selectedColor.red * intensity).toInt();
+          int g = (selectedColor.green * intensity).toInt();
+          int b = (selectedColor.blue * intensity).toInt();
+
+          neonCanvas.setPixel(x, y, img.ColorRgba8(r, g, b, 255));
         }
       }
     }
-    return detectedLines;
+
+    return Uint8List.fromList(img.encodePng(neonCanvas));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('✨ محول النيون الاحترافي ✨', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text('✨ نيون فائق الدقة والتفاصيل ✨', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         backgroundColor: const Color(0xFF0A0A12),
         elevation: 0,
         centerTitle: true,
@@ -146,13 +173,13 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
         children: [
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(12.0),
               child: Container(
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF010103),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: _selectedNeonColor.withOpacity(0.2), width: 2),
+                  color: const Color(0xFF010102),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _selectedNeonColor.withOpacity(0.15), width: 1.5),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: Stack(
@@ -162,9 +189,9 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.brush_rounded, size: 70, color: Colors.grey[800]),
+                          Icon(Icons.photo_filter_rounded, size: 65, color: Colors.grey[800]),
                           const SizedBox(height: 16),
-                          Text('ارفع رسمة القلم الرصاص لرؤية السحر', style: TextStyle(color: Colors.grey[500], fontSize: 15)),
+                          Text('ارفع الرسمة لالتقاط كل تفصيلة وخط', style: TextStyle(color: Colors.grey[500], fontSize: 14)),
                         ],
                       ),
                     if (_isLoading)
@@ -173,17 +200,16 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
                         children: [
                           CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(_selectedNeonColor)),
                           const SizedBox(height: 16),
-                          const Text('جاري تنعيم الحواف وتحويلها لنيون عالي الدقة...', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                          const Text('جاري تحليل الخطوط الرفيعة بدقة بكسلية مجهرية...', style: TextStyle(color: Colors.white70, fontSize: 13)),
                         ],
                       ),
-                    if (_imageFile != null && !_isLoading)
+                    if (_processedNeonImage != null && !_isLoading)
                       Positioned.fill(
                         child: InteractiveViewer(
-                          maxScale: 5.0,
+                          maxScale: 10.0, // زيادة الزووم لعشرة أضعاف لفحص التفاصيل الخارقة
                           child: CustomPaint(
-                            painter: HighFidelityNeonPainter(
-                              lines: _extractedLines,
-                              neonColor: _selectedNeonColor,
+                            painter: UltraFidelityNeonPainter(
+                              neonImage: _processedNeonImage!,
                             ),
                           ),
                         ),
@@ -194,52 +220,51 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
             decoration: const BoxDecoration(
               color: const Color(0xFF0A0A12),
-              borderRadius: BorderRadius.only(topLeft: Radius.circular(32), topRight: Radius.circular(32)),
+              borderRadius: BorderRadius.only(topLeft: Radius.circular(28), topRight: Radius.circular(28)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('اختر لون النيون المبهج والمشّع:', style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 16),
+                const Text('تغيير لون النيون المشع فورياً:', style: TextStyle(color: Colors.white60, fontSize: 13)),
+                const SizedBox(height: 12),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: _neonPalettes.map((color) {
                     bool isSelected = _selectedNeonColor == color;
                     return GestureDetector(
-                      onTap: () => setState(() => _selectedNeonColor = color),
+                      onTap: () => _updateNeonColor(color),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
-                        width: isSelected ? 46 : 34,
-                        height: isSelected ? 46 : 34,
+                        width: isSelected ? 44 : 32,
+                        height: isSelected ? 44 : 32,
                         decoration: BoxDecoration(
                           color: color,
                           shape: BoxShape.circle,
-                          border: isSelected ? Border.all(color: Colors.white, width: 3) : null,
+                          border: isSelected ? Border.all(color: Colors.white, width: 2.5) : null,
                           boxShadow: [
-                            BoxShadow(color: color.withOpacity(0.5), blurRadius: isSelected ? 14 : 4),
+                            BoxShadow(color: color.withOpacity(0.4), blurRadius: isSelected ? 12 : 3),
                           ],
                         ),
                       ),
                     );
                   }).toList(),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
-                  height: 54,
+                  height: 52,
                   child: ElevatedButton.icon(
                     onPressed: _isLoading ? null : _pickImage,
-                    icon: const Icon(Icons.add_photo_alternate_rounded, size: 22),
-                    label: const Text('رفع رسمة قلم رصاص', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    icon: const Icon(Icons.flash_on_rounded, size: 22),
+                    label: const Text('رفع وتألق الرسمة بالكامل', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _selectedNeonColor,
                       foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      elevation: 6,
-                      shadowColor: _selectedNeonColor.withOpacity(0.3),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 4,
                     ),
                   ),
                 ),
@@ -252,104 +277,40 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
   }
 }
 
-class PointInt {
-  final int x;
-  final int y;
-  PointInt(this.x, this.y);
-}
+class UltraFidelityNeonPainter extends CustomPainter {
+  final ui.Image neonImage;
 
-// الرسام الاحترافي: تم تعديله ليدعم خوارزمية البيزيه لتنعيم الخطوط المتوافقة مع جميع الإصدارات
-class HighFidelityNeonPainter extends CustomPainter {
-  final List<List<Offset>> lines;
-  final Color neonColor;
-
-  HighFidelityNeonPainter({required this.lines, required this.neonColor});
+  UltraFidelityNeonPainter({required this.neonImage});
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (lines.isEmpty) return;
-
-    double minX = double.infinity, minY = double.infinity;
-    double maxX = double.negativeInfinity, maxY = double.negativeInfinity;
-
-    for (var line in lines) {
-      for (var pt in line) {
-        if (pt.dx < minX) minX = pt.dx;
-        if (pt.dy < minY) minY = pt.dy;
-        if (pt.dx > maxX) maxX = pt.dx;
-        if (pt.dy > maxY) maxY = pt.dy;
-      }
-    }
-
-    double contentWidth = maxX - minX;
-    double contentHeight = maxY - minY;
-    if (contentWidth <= 0 || contentHeight <= 0) return;
-
-    double scaleX = (size.width - 40) / contentWidth;
-    double scaleY = (size.height - 40) / contentHeight;
+    double scaleX = size.width / neonImage.width;
+    double scaleY = size.height / neonImage.height;
     double scale = scaleX < scaleY ? scaleX : scaleY;
 
-    double offsetX = (size.width - contentWidth * scale) / 2 - minX * scale;
-    double offsetY = (size.height - contentHeight * scale) / 2 - minY * scale;
+    double destWidth = neonImage.width * scale;
+    double destHeight = neonImage.height * scale;
+    double offsetX = (size.width - destWidth) / 2;
+    double offsetY = (size.height - destHeight) / 2;
 
-    List<Path> smoothedPaths = [];
-    for (var line in lines) {
-      if (line.length < 2) continue;
+    Rect destRect = Rect.fromLTWH(offsetX, offsetY, destWidth, destHeight);
+    Rect srcRect = Rect.fromLTWH(0, 0, neonImage.width.toDouble(), neonImage.height.toDouble());
 
-      final points = line.map((p) => 
-        Offset(p.dx * scale + offsetX, p.dy * scale + offsetY)
-      ).toList();
+    // طبقة 1: التوهج المحيطي الفوسفوري الذكي (Glow Sigma مُعدّل ليكون ناعماً ولا يطمس الخطوط القريبة)
+    final paintGlow = Paint()
+      ..imageFilter = ui.ImageFilter.blur(sigmaX: 4.5, sigmaY: 4.5, tileMode: ui.TileMode.decal)
+      ..blendMode = ui.BlendMode.plus; 
 
-      final path = Path();
-      path.moveTo(points[0].dx, points[0].dy);
+    canvas.drawImageRect(neonImage, srcRect, destRect, paintGlow);
 
-      // تطبيق تنعيم يدوي فائق الانسيابية (Quadratic Bézier Smoothing)
-      for (int i = 0; i < points.length - 1; i++) {
-        final xc = (points[i].dx + points[i + 1].dx) / 2;
-        final yc = (points[i].dy + points[i + 1].dy) / 2;
-        path.quadraticBezierTo(points[i].dx, points[i].dy, xc, yc);
-      }
-      
-      // توصيل النقطة الأخيرة
-      path.lineTo(points.last.dx, points.last.dy);
-      smoothedPaths.add(path);
-    }
+    // طبقة 2: طبقة حدة وثبات التفاصيل الرفيعة (The Core Lines)
+    final paintCore = Paint()..blendMode = ui.BlendMode.screen;
 
-    // رسم طبقات النيون المتوهجة الثلاثية الاحترافية
-    for (var path in smoothedPaths) {
-      // 1. التوهج الخارجي العريض الفوسفوري
-      final outerGlow = Paint()
-        ..color = neonColor.withOpacity(0.12)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 20.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..maskFilter = const MaskFilter.blur(ui.BlurStyle.normal, 12);
-      canvas.drawPath(path, outerGlow);
-
-      // 2. توهج قلب الغاز الكثيف
-      final innerGlow = Paint()
-        ..color = neonColor.withOpacity(0.75)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 6.5
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..maskFilter = const MaskFilter.blur(ui.BlurStyle.normal, 3);
-      canvas.drawPath(path, innerGlow);
-
-      // 3. قلب النيون الأبيض الكهربائي شديد السطوع
-      final electricCore = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..strokeWidth = 2.0; 
-      canvas.drawPath(path, electricCore);
-    }
+    canvas.drawImageRect(neonImage, srcRect, destRect, paintCore);
   }
 
   @override
-  bool shouldRepaint(covariant HighFidelityNeonPainter oldDelegate) {
-    return oldDelegate.lines != lines || oldDelegate.neonColor != neonColor;
+  bool shouldRepaint(covariant UltraFidelityNeonPainter oldDelegate) {
+    return oldDelegate.neonImage != neonImage;
   }
 }
