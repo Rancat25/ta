@@ -1,4 +1,4 @@
-import 'dart:io';
+ 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
@@ -298,7 +298,7 @@ class UltraFidelityNeonPainter extends CustomPainter {
 
     // طبقة 1: التوهج المحيطي الفوسفوري الذكي (Glow Sigma مُعدّل ليكون ناعماً ولا يطمس الخطوط القريبة)
     final paintGlow = Paint()
-      ..imageFilter = ui.ImageFilter.blur(sigmaX: 4.5, sigmaY: 4.5, tileMode: ui.TileMode.decal)
+      ..imageFilter = ui.ImageFilter.blur(sigmaX: 6.0, sigmaY: 6.0, tileMode: ui.TileMode.decal)
       ..blendMode = ui.BlendMode.plus; 
 
     canvas.drawImageRect(neonImage, srcRect, destRect, paintGlow);
