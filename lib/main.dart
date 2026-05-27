@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
@@ -16,7 +17,7 @@ class NeonTransformerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Neon Ultra Fidelity',
+      title: 'Multi-Color Neon Transformer',
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF020204),
         primaryColor: Colors.pinkAccent,
@@ -38,21 +39,22 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
   File? _imageFile;
   ui.Image? _processedNeonImage; 
   bool _isLoading = false;
-  Color _selectedNeonColor = Colors.pinkAccent;
-  final ImagePicker _picker = ImagePicker();
+  
+  // نستخدم الآن "مجموعة ألوان" أو مصفوفة تدرج مبهجة بدلاً من لون واحد ثابت
+  int _selectedPaletteIndex = 0;
 
-  final List<Color> _neonPalettes = [
-    Colors.pinkAccent,
-    Colors.cyanAccent,
-    Colors.limeAccent,
-    Colors.amberAccent,
-    Colors.purpleAccent,
+  // مجموعات ألوان نيون مبهجة ومتناسقة جداً فندرياً
+  final List<List<Color>> _neonPalettes = [
+    [Colors.pinkAccent, Colors.purpleAccent, Colors.cyanAccent], // كوكتيل ساحر
+    [Colors.cyanAccent, Colors.limeAccent, Colors.tealAccent],  // انتعاش فسفوري
+    [Colors.amberAccent, Colors.orangeAccent, Colors.pinkAccent], // غروب النيون الدافئ
+    [Colors.purpleAccent, Colors.indigoAccent, Colors.blueAccent], // غموض ليلي
   ];
 
   Future<void> _pickImage() async {
     final XFile? pickedFile = await _picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 1200, // رفع الدقة لـ 1200 لضمان عدم ضياع أي بكسل رفيع
+      maxWidth: 1200, 
       maxHeight: 1200,
     );
 
@@ -62,23 +64,28 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
         _processedNeonImage = null;
         _isLoading = true;
       });
-      _renderNeonImage(pickedFile.path, _selectedNeonColor);
+      _renderMultiColorNeon(pickedFile.path);
     }
   }
 
-  void _updateNeonColor(Color newColor) {
+  void _changePalette(int index) {
     if (_imageFile == null || _isLoading) return;
     setState(() {
-      _selectedNeonColor = newColor;
+      _selectedPaletteIndex = index;
       _isLoading = true;
     });
-    _renderNeonImage(_imageFile!.path, newColor);
+    _renderMultiColorNeon(_imageFile!.path);
   }
 
-  Future<void> _renderNeonImage(String path, Color neonColor) async {
-    final Uint8List? pngBytes = await compute(_convertAllLinesToNeon, {
+  final ImagePicker _picker = ImagePicker();
+
+  Future<void> _renderMultiColorNeon(String path) async {
+    // تجهيز الألوان المميّزة للمجموعة المختارة وتمرير قيمها الرقمية
+    List<int> colorValues = _neonPalettes[_selectedPaletteIndex].map((c) => c.value).toList();
+
+    final Uint8List? pngBytes = await compute(_convertPixelsToMultiColorNeon, {
       'path': path,
-      'color': neonColor.value,
+      'palette': colorValues,
     });
 
     if (pngBytes != null) {
@@ -93,11 +100,11 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
     }
   }
 
-  // 🛠️ الخوارزمية المطورة جداً لالتقاط تفاصيل الخطوط مهما كانت نحيفة (Fidelity Max)
-  static Uint8List? _convertAllLinesToNeon(Map<String, dynamic> params) {
+  // 🛠️ الخوارزمية البكسلية المتطورة لدمج الألوان المتناسقة (Spectrum Mapping)
+  static Uint8List? _convertPixelsToMultiColorNeon(Map<String, dynamic> params) {
     final String path = params['path'];
-    final int colorValue = params['color'];
-    final Color selectedColor = Color(colorValue);
+    final List<dynamic> paletteRaw = params['palette'];
+    final List<Color> palette = paletteRaw.map((v) => Color(v as int)).toList();
 
     final bytes = File(path).readAsBytesSync();
     img.Image? originalImage = img.decodeImage(bytes);
@@ -106,40 +113,29 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
     int width = originalImage.width;
     int height = originalImage.height;
 
-    // 1. تحويل الصورة إلى التدرج الرمادي بدون أي بلور (تنعيم) للحفاظ على الخطوط النحيفة كالشعر
     img.Image gray = img.grayscale(originalImage);
-
-    // 2. إنشاء الكانفاس الأسود بالكامل للخلفية
     img.Image neonCanvas = img.Image(width: width, height: height);
-    img.fill(neonCanvas, color: img.ColorRgba8(5, 5, 8, 255)); 
+    img.fill(neonCanvas, color: img.ColorRgba8(4, 4, 6, 255)); 
 
-    // 3. الفحص البكسلي المتقدم المعتمد على التباين الموضعي
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         final pixel = gray.getPixel(x, y);
         double currentLuminance = (pixel.r * 0.299 + pixel.g * 0.587 + pixel.b * 0.114) / 255.0;
 
-        // خوارزمية ذكية: نتحقق من محيط البكسل لمعرفة ما إذا كان جزءاً من خط رفيع
-        // نقوم بحساب التباين المباشر مقارنة بمتوسط إضاءة الورقة حوله
         bool isLine = false;
         double intensity = 0.0;
 
-        // إذا كان البكسل داكناً بشكل عام (الخطوط العريضة)
         if (currentLuminance < 0.90) { 
           isLine = true;
-          intensity = (1.0 - currentLuminance) * 1.2; // تعزيز الإضاءة للخطوط الرمادية
+          intensity = (1.0 - currentLuminance) * 1.3;
         } 
-        // التقط الخطوط الرفيعة جداً (حتى لو كانت رمادية فاتحة على خلفية رمادية)
         else if (currentLuminance < 0.96) {
-          // فحص عينة سريعة من الجيران للتأكد أنه خط وليس نويز
           if (x > 1 && x < width - 1 && y > 1 && y < height - 1) {
             final pRight = gray.getPixel(x + 1, y);
             double lumRight = (pRight.r * 0.299 + pRight.g * 0.587 + pRight.b * 0.114) / 255.0;
-            
-            // إذا كان البكسل الحالي أدكن من جاره بأكثر من 2%، إذن هو خط رفيع جداً!
             if ((lumRight - currentLuminance) > 0.02) {
               isLine = true;
-              intensity = (1.0 - currentLuminance) * 2.5; // مضاعفة القوة للخطوط الرفيعة لتظهر بوضوح مشع
+              intensity = (1.0 - currentLuminance) * 2.5; 
             }
           }
         }
@@ -147,10 +143,20 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
         if (isLine) {
           intensity = intensity.clamp(0.0, 1.0);
 
-          // دمج بكسل النيون المشع مع الحفاظ المطلق على الحجم الأصلي (بكسل مقابل بكسل)
-          int r = (selectedColor.red * intensity).toInt();
-          int g = (selectedColor.green * intensity).toInt();
-          int b = (selectedColor.blue * intensity).toInt();
+          // ✨ السر هنا: حساب نسبة تداخل الألوان بناءً على موقع البكسل هندسياً وزاوية ميله
+          // هذا يجعل الشعرات المتجاورة أو الخطوط المختلفة تتلون بتناسق رائع يتبع انحناءات الرسمة
+          double factor = (x / width * 0.6) + (y / height * 0.4);
+          
+          // إضافة موجة جيبية خفيفة (Sine Wave) لكسر الرتابة وجعل كل خصلة شعر تختلف بشكل متناسق عن المجاورة لها
+          factor += math.sin(x * 0.05 + y * 0.05) * 0.15;
+          factor = factor.clamp(0.0, 0.99);
+
+          // تحديد اللون الدقيق الممزوج من لوحة الألوان بناءً على الـ factor
+          Color finalColor = _interpolateColor(palette, factor);
+
+          int r = (finalColor.red * intensity).toInt();
+          int g = (finalColor.green * intensity).toInt();
+          int b = (finalColor.blue * intensity).toInt();
 
           neonCanvas.setPixel(x, y, img.ColorRgba8(r, g, b, 255));
         }
@@ -160,11 +166,25 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
     return Uint8List.fromList(img.encodePng(neonCanvas));
   }
 
+  // دالة رياضية لدمج ومزج قائمة من الألوان بنعومة وسلاسة (Linear Interpolation)
+  static Color _interpolateColor(List<Color> colors, double t) {
+    if (colors.isEmpty) return Colors.white;
+    if (colors.length == 1) return colors.first;
+    
+    double scaledT = t * (colors.length - 1);
+    int index = scaledT.floor();
+    double localT = scaledT - index;
+    
+    if (index >= colors.length - 1) return colors.last;
+    
+    return Color.lerp(colors[index], colors[index + 1], localT)!;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('✨ نيون فائق الدقة والتفاصيل ✨', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
+        title: const Text('🌈 نيون مبهج متعدد الألوان 🌈', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         backgroundColor: const Color(0xFF0A0A12),
         elevation: 0,
         centerTitle: true,
@@ -179,7 +199,7 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF010102),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _selectedNeonColor.withOpacity(0.15), width: 1.5),
+                  border: Border.all(color: Colors.white10, width: 1),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: Stack(
@@ -189,26 +209,26 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.photo_filter_rounded, size: 65, color: Colors.grey[800]),
+                          Icon(Icons.palette_rounded, size: 65, color: Colors.grey[800]),
                           const SizedBox(height: 16),
-                          Text('ارفع الرسمة لالتقاط كل تفصيلة وخط', style: TextStyle(color: Colors.grey[500], fontSize: 14)),
+                          Text('ارفع الرسمة لتشاهد سحر تداخل ألوان النيون', style: TextStyle(color: Colors.grey[500], fontSize: 14)),
                         ],
                       ),
                     if (_isLoading)
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(_selectedNeonColor)),
+                          CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(_neonPalettes[_selectedPaletteIndex].first)),
                           const SizedBox(height: 16),
-                          const Text('جاري تحليل الخطوط الرفيعة بدقة بكسلية مجهرية...', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                          const Text('جاري توزيع الطيف اللوني على تفاصيل الرسمة والشعر...', style: TextStyle(color: Colors.white70, fontSize: 13)),
                         ],
                       ),
                     if (_processedNeonImage != null && !_isLoading)
                       Positioned.fill(
                         child: InteractiveViewer(
-                          maxScale: 10.0, // زيادة الزووم لعشرة أضعاف لفحص التفاصيل الخارقة
+                          maxScale: 10.0, 
                           child: CustomPaint(
-                            painter: UltraFidelityNeonPainter(
+                            painter: MultiColorNeonPainter(
                               neonImage: _processedNeonImage!,
                             ),
                           ),
@@ -219,6 +239,8 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
               ),
             ),
           ),
+          
+          // لوحة التحكم واختيار باليتات النيون المبهجة
           Container(
             padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
             decoration: const BoxDecoration(
@@ -228,40 +250,49 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('تغيير لون النيون المشع فورياً:', style: TextStyle(color: Colors.white60, fontSize: 13)),
-                const SizedBox(height: 12),
+                const Text('اختر مجموعة الألوان المتناسقة للنيون:', style: TextStyle(color: Colors.white60, fontSize: 13)),
+                const SizedBox(height: 14),
+                
+                // عرض مجموعات الألوان كأزرار دائرية مدمجة
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: _neonPalettes.map((color) {
-                    bool isSelected = _selectedNeonColor == color;
+                  children: _neonPalettes.asMap().entries.map((entry) {
+                    int idx = entry.key;
+                    List<Color> palette = entry.value;
+                    bool isSelected = _selectedPaletteIndex == idx;
+                    
                     return GestureDetector(
-                      onTap: () => _updateNeonColor(color),
+                      onTap: () => _changePalette(idx),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: isSelected ? 44 : 32,
-                        height: isSelected ? 44 : 32,
+                        duration: const Duration(milliseconds: 250),
+                        width: isSelected ? 52 : 40,
+                        height: isSelected ? 52 : 40,
                         decoration: BoxDecoration(
-                          color: color,
                           shape: BoxShape.circle,
-                          border: isSelected ? Border.all(color: Colors.white, width: 2.5) : null,
+                          border: isSelected ? Border.all(color: Colors.white, width: 3) : null,
+                          gradient: LinearGradient(
+                            colors: palette,
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
                           boxShadow: [
-                            BoxShadow(color: color.withOpacity(0.4), blurRadius: isSelected ? 12 : 3),
+                            BoxShadow(color: palette.first.withOpacity(0.4), blurRadius: isSelected ? 12 : 3),
                           ],
                         ),
                       ),
                     );
                   }).toList(),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 22),
                 SizedBox(
                   width: double.infinity,
                   height: 52,
                   child: ElevatedButton.icon(
                     onPressed: _isLoading ? null : _pickImage,
-                    icon: const Icon(Icons.flash_on_rounded, size: 22),
-                    label: const Text('رفع وتألق الرسمة بالكامل', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                    icon: const Icon(Icons.auto_awesome_rounded, size: 22),
+                    label: const Text('رفع الرسمة وتلوينها بالطيف الساحر', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _selectedNeonColor,
+                      backgroundColor: _neonPalettes[_selectedPaletteIndex].first,
                       foregroundColor: Colors.black,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       elevation: 4,
@@ -277,10 +308,10 @@ class _NeonProcessorScreenState extends State<NeonProcessorScreen> {
   }
 }
 
-class UltraFidelityNeonPainter extends CustomPainter {
+class MultiColorNeonPainter extends CustomPainter {
   final ui.Image neonImage;
 
-  UltraFidelityNeonPainter({required this.neonImage});
+  MultiColorNeonPainter({required this.neonImage});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -296,21 +327,21 @@ class UltraFidelityNeonPainter extends CustomPainter {
     Rect destRect = Rect.fromLTWH(offsetX, offsetY, destWidth, destHeight);
     Rect srcRect = Rect.fromLTWH(0, 0, neonImage.width.toDouble(), neonImage.height.toDouble());
 
-    // طبقة 1: التوهج المحيطي الفوسفوري الذكي (Glow Sigma مُعدّل ليكون ناعماً ولا يطمس الخطوط القريبة)
+    // طبقة التوهج الخارجي الفوسفوري المتعدد الألوان
     final paintGlow = Paint()
-      ..imageFilter = ui.ImageFilter.blur(sigmaX: 6.0, sigmaY: 6.0, tileMode: ui.TileMode.decal)
+      ..imageFilter = ui.ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0, tileMode: ui.TileMode.decal)
       ..blendMode = ui.BlendMode.plus; 
 
     canvas.drawImageRect(neonImage, srcRect, destRect, paintGlow);
 
-    // طبقة 2: طبقة حدة وثبات التفاصيل الرفيعة (The Core Lines)
+    // طبقة ثبات حدة البكسلات الملونة الأصلية
     final paintCore = Paint()..blendMode = ui.BlendMode.screen;
 
     canvas.drawImageRect(neonImage, srcRect, destRect, paintCore);
   }
 
   @override
-  bool shouldRepaint(covariant UltraFidelityNeonPainter oldDelegate) {
+  bool shouldRepaint(covariant MultiColorNeonPainter oldDelegate) {
     return oldDelegate.neonImage != neonImage;
   }
 }
